@@ -54,6 +54,7 @@
   var lastFrames = -1, lastPos = null, lastCar = -1;
   var dMin = null;
   var knocks = []; // knocks from other players, applied on the next step
+  var pushes = []; // velocity changes asked for by other mods on this machine
   var kick = 0; // velocity change of our car's centre from the last resolve()
 
   var f4 = new Float32Array(3), u4 = new Uint8Array(f4.buffer);
@@ -194,6 +195,13 @@
     r.knocked = now;
     r.quiet = now + PAIR_MS;
     if (knocks.length < 8) knocks.push({ dv: dv, r: at });
+  };
+
+  // From another mod on this machine (not from the network): change the
+  // player's car's velocity by `dv` and its angular velocity by `dw`.
+  ptc.impulse = function (msg) {
+    var dv = vec3(msg.dv, 60), dw = vec3(msg.dw, 30);
+    if (dv && dw && pushes.length < 8) pushes.push({ dv: dv, dw: dw });
   };
 
   function applyKnocks(f, i) {
@@ -384,7 +392,7 @@
   // record of it and `ptr` the state buffer the step has just filled.
   ptc.afterStep = function (M, car, ptr) {
     if (!car || car.userControls == null) return;
-    if (!remotes.size) { lastPos = null; return; }
+    if (!remotes.size && !pushes.length) { lastPos = null; return; }
 
     var u8 = M.HEAPU8;
     var frames = u8[ptr + 4] | (u8[ptr + 5] << 8) | (u8[ptr + 6] << 16);
@@ -408,7 +416,19 @@
     if (lastPos === null) lastPos = [px, py, pz]; else { lastPos[0] = px; lastPos[1] = py; lastPos[2] = pz; }
     if (jumped) remotes.forEach(unsolid);
 
-    if (!(flags & 1) || (flags & 2)) return; // not started, or finished
+    if (!(flags & 1) || (flags & 2)) { pushes.length = 0; return; } // not started, or finished
+    if (pushes.length) {
+      var b = locate(M, car.id, px, py, pz);
+      if (b >= 0) {
+        var h = M.HEAPF32;
+        for (var k = 0; k < pushes.length; k++) {
+          var push = pushes[k];
+          h[b + 65] += push.dv[0]; h[b + 66] += push.dv[1]; h[b + 67] += push.dv[2];
+          h[b + 69] += push.dw[0]; h[b + 70] += push.dw[1]; h[b + 71] += push.dw[2];
+        }
+      }
+      pushes.length = 0;
+    }
     if (now - lastMessage > STALE_MS) { remotes.forEach(unsolid); knocks.length = 0; return; }
 
     var i = -1, f = null, boxReady = false;

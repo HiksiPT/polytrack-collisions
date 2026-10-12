@@ -20,6 +20,7 @@ const WORKER_MIXINS = [
     token: "const r = i.data;",
     func: `if (r && r.messageType === "ptc") { self.__ptc.remote(r); return; }
       if (r && r.messageType === "ptcKnock") { self.__ptc.knock(r); return; }
+      if (r && r.messageType === "ptcImpulse") { self.__ptc.impulse(r); return; }
       if (r && "isRealtime" in r) self.__ptc.realtime = !!r.isRealtime;`,
   },
   { type: MixinType.INSERT, token: "PolyTrackPhysics().then(async (t) => {", func: "self.__ptc.attach(t);" },
@@ -54,6 +55,21 @@ class CarCollisions extends PolyMod {
   #failed = false;
   #channels = new Map(); // RTCPeerConnection -> { id, channel }
   stats = { hits: 0, knocksSent: 0, knocksReceived: 0 };
+
+  // ---- for other mods (reached through globalThis.__ptCollisions) ----------
+  // Players whose cars are not solid on this machine, and a switch for all.
+  ghostIds = new Set();
+  ghostAll = false;
+
+  // Changes the velocity (m/s) and angular velocity (rad/s) of the player's car.
+  impulse(dv, dw = [0, 0, 0]) {
+    this.postToSim({ messageType: "ptcImpulse", dv, dw });
+  }
+
+  // Sends a message to the simulation workers; they ignore types they do not know.
+  postToSim(message) {
+    for (const worker of this.#workers) worker.postMessage(message);
+  }
 
   constructor() {
     super();
@@ -255,7 +271,7 @@ class CarCollisions extends PolyMod {
             p: [state.position.x, state.position.y, state.position.z],
             q: [state.quaternion.x, state.quaternion.y, state.quaternion.z, state.quaternion.w],
             s: state.hasStarted,
-            e: state.finishFrames != null,
+            e: state.finishFrames != null || this.ghostAll || this.ghostIds.has(id),
           });
         }
       }

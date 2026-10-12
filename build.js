@@ -3,7 +3,7 @@ const fs = require("fs");
 const path = require("path");
 const zlib = require("zlib");
 
-const VERSION = "1.1.0";
+const VERSION = "1.2.0";
 const GAME = "0.6.3";
 const root = __dirname;
 const out = path.join(root, "dist", VERSION);

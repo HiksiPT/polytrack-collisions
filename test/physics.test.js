@@ -168,6 +168,13 @@ function check(name, ok, detail) {
   check("crash: no knock back to a car that has just knocked us", reports.length === 0, `${reports.length} report(s)`);
   globalThis.postMessage = post;
 
+  // 8. impulses asked for by another mod (no other cars needed)
+  ptc._debug.remotes.clear();
+  let pushedAt = -1;
+  const pushed = drive(N, (f) => { if (f === 2000) { pushedAt = f; ptc.impulse({ dv: [0, 8, 0], dw: [0, 0, 0] }); ptc.impulse({ dv: [0, "x", 0], dw: [0, 0, 0] }); } return null; });
+  const hop = Math.max(...pushed.trace.slice(2000, 2600).map((s2, k) => s2.p[1] - free.trace[2000 + k].p[1]));
+  check("impulse from another mod: the car is thrown upwards", hop > 1.5 && hop < 6, `${hop.toFixed(2)} m above the free run`);
+
   console.log(failed ? `${failed} check(s) failed` : "all checks passed");
   process.exit(failed ? 1 : 0);
 })().catch((e) => { console.error(e); process.exit(1); });
