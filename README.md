@@ -25,6 +25,11 @@ Every player in the session needs the mod, in the same version.
   the player you hit, whose car is knocked away in turn. The knock arrives a moment later,
   after the network delay. Collisions are tuned to be lively, not realistic: strong bounce,
   spin, and a small hop on hard hits (constants at the top of `src/worker-runtime.js`).
+- Pinches: a car that is landed on while its wheels are on the track, or squeezed between two
+  cars from opposite sides, is flung out sideways at high speed (35 m/s plus the speed of the
+  squeeze, and always at least 20 m/s faster than it was going; at most 80 m/s), with a hop and
+  a spin. Either game can spot it: the one being pinched, or the one that landed on it. At most
+  one fling every 0.5 s.
 - A car is not solid while it has not started, after it has finished, when its data stops
   arriving, or while it overlaps yours after a start, restart or checkpoint respawn. It
   becomes solid once the two cars have been apart for 0.15 s.

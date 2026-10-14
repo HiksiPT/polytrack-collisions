@@ -122,7 +122,7 @@ class CarCollisions extends PolyMod {
       const data = event.data;
       if (data && data.messageType === "ptcHit") {
         this.stats.hits++;
-        this.#sendKnock(data.to, data.dv, data.r);
+        this.#sendKnock(data.to, data.dv, data.r, data.pinch === true);
       }
     });
     const terminate = worker.terminate, workers = this.#workers;
@@ -190,6 +190,18 @@ class CarCollisions extends PolyMod {
       }
     };
     requestAnimationFrame(tick);
+
+    // The loader's own "Auto Update" switch does not reach the loader in PML Core 1.3.8 (it is
+    // passed to the wrong function), so mods imported by link stay on the version they were
+    // imported at. Asking to be saved as "latest" makes a reload pick up new uploads instead.
+    try {
+      if (!this.savedLatest) {
+        this.savedLatest = true;
+        pml.saveModsToLocalStorage();
+      }
+    } catch (error) {
+      console.error("[Car Collisions] could not switch to automatic updates:", error);
+    }
     console.log(`[Car Collisions] ${this.tag} ready`);
   }
 
@@ -226,11 +238,11 @@ class CarCollisions extends PolyMod {
     try { entry.channel.send(JSON.stringify(message)); } catch {}
   }
 
-  #sendKnock(to, dv, r) {
+  #sendKnock(to, dv, r, pinch) {
     const entries = [...this.#channels.values()];
     const host = entries.find((entry) => entry.id === null); // set when we are not the host
-    if (host) this.#post(host, { to, dv, r });
-    else this.#post(entries.find((entry) => entry.id === to), { from: this.#selfId(), dv, r });
+    if (host) this.#post(host, { to, dv, r, pinch });
+    else this.#post(entries.find((entry) => entry.id === to), { from: this.#selfId(), dv, r, pinch });
     this.stats.knocksSent++;
   }
 
@@ -245,13 +257,13 @@ class CarCollisions extends PolyMod {
       from = entry.id;
       if (message.to !== this.#selfId()) {
         const target = [...this.#channels.values()].find((other) => other.id === message.to && other !== entry);
-        this.#post(target, { from, dv: message.dv, r: message.r });
+        this.#post(target, { from, dv: message.dv, r: message.r, pinch: message.pinch === true });
         return;
       }
     }
     if (!Number.isSafeInteger(from)) return;
     this.stats.knocksReceived++;
-    for (const worker of this.#workers) worker.postMessage({ messageType: "ptcKnock", from, dv: message.dv, r: message.r });
+    for (const worker of this.#workers) worker.postMessage({ messageType: "ptcKnock", from, dv: message.dv, r: message.r, pinch: message.pinch === true });
   }
 
   #update() {

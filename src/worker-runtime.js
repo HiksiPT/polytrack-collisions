@@ -27,6 +27,18 @@
   var KNOCK = 0.5; // how much of our own bounce the car we hit receives
   var KNOCK_MAX = 30; // largest knock accepted from another player, m/s
   var PAIR_MS = 250; // one crash is settled once per pair of cars within this time
+
+  // A pinched car (landed on while on the ground, or squeezed between two cars) is
+  // flung out sideways, like a pinch in Rocket League.
+  var PINCH_SPEED = 35; // m/s, plus the speed of the squeeze
+  var PINCH_GAIN = 20; // m/s: a car already going fast still gets at least this much faster
+  var PINCH_MAX = 80; // m/s
+  var PINCH_UP = 6; // m/s upwards on top of that
+  var PINCH_SPIN = 4; // rad/s about the vertical
+  var PINCH_PRESS = 2; // m/s: slower contacts are not a pinch
+  var PINCH_DOWN = 0.6; // how vertical a push from above must be (1 = straight down)
+  var PINCH_OPPOSED = -0.5; // how opposed two pushes must be (-1 = head on)
+  var PINCH_MS = 500; // a car is flung at most this often
   var SLOP = 0.01; // penetration tolerated without push-out, m
   var BIAS_GAIN = 20; // push-out speed per metre of penetration, 1/s
   var BIAS_MAX = 2; // m/s
@@ -42,6 +54,7 @@
     now: function () { return performance.timeOrigin + performance.now(); },
     hits: 0, // contacts of our car with another car
     knocked: 0, // knocks received from other players
+    pinches: 0, // times our car was flung out of a pinch
   };
   self.__ptc = ptc;
 
@@ -56,6 +69,9 @@
   var knocks = []; // knocks from other players, applied on the next step
   var pushes = []; // velocity changes asked for by other mods on this machine
   var kick = 0; // velocity change of our car's centre from the last resolve()
+  var pressed = 0; // how fast the other car was closing in, from the last resolve()
+  var pinchUntil = 0;
+  var recentKnocks = []; // { from, dv, at } of the last moments, to spot a squeeze
 
   var f4 = new Float32Array(3), u4 = new Uint8Array(f4.buffer);
 
@@ -194,7 +210,7 @@
     if (!dv || !at) return;
     r.knocked = now;
     r.quiet = now + PAIR_MS;
-    if (knocks.length < 8) knocks.push({ dv: dv, r: at });
+    if (knocks.length < 8) knocks.push({ dv: dv, r: at, from: msg.from, pinch: msg.pinch === true, at: now });
   };
 
   // From another mod on this machine (not from the network): change the
@@ -204,10 +220,22 @@
     if (dv && dw && pushes.length < 8) pushes.push({ dv: dv, dw: dw });
   };
 
-  function applyKnocks(f, i) {
+  function applyKnocks(f, i, grounded, now) {
     var im = f[i + 73], ux = f[i - 11], uy = f[i - 7], uz = f[i - 3];
+    var pinch = null;
+    recentKnocks = recentKnocks.filter(function (old) { return now - old.at < 150; });
     for (var k = 0; k < knocks.length; k++) {
       var dv = knocks[k].dv, r = knocks[k].r;
+      var size0 = Math.sqrt(dv[0] * dv[0] + dv[1] * dv[1] + dv[2] * dv[2]) || 1;
+      // landed on: the other game saw its car come down on ours
+      if (knocks[k].pinch && grounded) pinch = { x: -r[0], z: -r[2], speed: size0 };
+      // squeezed: knocks from two players at once, from opposite sides
+      for (var m = 0; m < recentKnocks.length; m++) {
+        var o = recentKnocks[m], size1 = Math.sqrt(o.dv[0] * o.dv[0] + o.dv[1] * o.dv[1] + o.dv[2] * o.dv[2]) || 1;
+        if (o.from !== knocks[k].from && (o.dv[0] * dv[0] + o.dv[1] * dv[1] + o.dv[2] * dv[2]) / (size0 * size1) < PINCH_OPPOSED)
+          pinch = { axis: [dv[0] / size0, dv[1] / size0, dv[2] / size0], speed: (size0 + size1) / 2 };
+      }
+      recentKnocks.push(knocks[k]);
       var h = (r[0] * ux + r[1] * uy + r[2] * uz) * (1 - LEVER);
       var rx = r[0] - ux * h, ry = r[1] - uy * h, rz = r[2] - uz * h;
       // torque of the same impulse, per unit of mass
@@ -220,6 +248,29 @@
       ptc.knocked++;
     }
     knocks.length = 0;
+    if (pinch) fling(f, i, pinch, now);
+  }
+
+  // Throws the player's car out of a pinch. `how` gives either the way out
+  // ({ x, z }) or the axis it was squeezed along ({ axis }), and the speed of the squeeze.
+  function fling(f, i, how, now) {
+    if (now < pinchUntil) return;
+    var vx = f[i + 65], vz = f[i + 67], ex, ez;
+    if (how.axis) {
+      // out sideways from the squeeze, whichever side we were already heading
+      ex = -how.axis[2]; ez = how.axis[0];
+      if (ex * vx + ez * vz < 0) { ex = -ex; ez = -ez; }
+    } else { ex = how.x; ez = how.z; }
+    var len = Math.sqrt(ex * ex + ez * ez);
+    if (len < 0.2) { ex = vx; ez = vz; len = Math.sqrt(ex * ex + ez * ez); }
+    if (len < 0.2) { ex = f[i - 10]; ez = f[i - 2]; len = Math.sqrt(ex * ex + ez * ez) || 1; } // the car's nose
+    var speed = Math.min(PINCH_MAX, Math.max(PINCH_SPEED + how.speed, Math.sqrt(vx * vx + vz * vz) + PINCH_GAIN));
+    f[i + 65] = ex / len * speed;
+    f[i + 66] = Math.max(f[i + 66], 0) + PINCH_UP;
+    f[i + 67] = ez / len * speed;
+    f[i + 70] += (ex * vz - ez * vx >= 0 ? 1 : -1) * PINCH_SPIN;
+    pinchUntil = now + PINCH_MS;
+    ptc.pinches++;
   }
 
   // ---- geometry -----------------------------------------------------------
@@ -352,6 +403,7 @@
     var rel = [0, 0, 0];
     relative(rel);
     var vn = rel[0] * n[0] + rel[1] * n[1] + rel[2] * n[2];
+    pressed = -vn;
     var hard = vn < -1;
     var target = hard ? -restitution * vn : 0;
     if (hard && impact && target < MIN_KICK) target = MIN_KICK;
@@ -432,9 +484,11 @@
     if (now - lastMessage > STALE_MS) { remotes.forEach(unsolid); knocks.length = 0; return; }
 
     var i = -1, f = null, boxReady = false;
+    var grounded = (flags & 120) !== 0; // any wheel touching the track
+    var contacts = [];
     if (knocks.length) {
       i = locate(M, car.id, px, py, pz);
-      if (i >= 0) { f = M.HEAPF32; applyKnocks(f, i); } else knocks.length = 0;
+      if (i >= 0) { f = M.HEAPF32; applyKnocks(f, i, grounded, now); } else knocks.length = 0;
     }
     remotes.forEach(function (r) {
       if (!r.ok) return;
@@ -486,15 +540,36 @@
       var impact = !r.touching, quiet = now < r.quiet;
       var dv = resolve(f, i, r, bx, by, bz, quiet ? 0 : RESTITUTION, impact && !quiet);
       r.touching = true;
+      var n = sat.n;
+      contacts.push({ n: [n[0], n[1], n[2]], pressed: pressed, bx: bx, bz: bz });
       if (!(dv > 0) || !impact) return;
       ptc.hits++;
       if (quiet || kick < 1) return;
       r.mute = now + PAIR_MS; // its own report of this crash is ignored
-      var n = sat.n, g = -kick * KNOCK;
+      var g = -kick * KNOCK;
       try {
-        self.postMessage({ messageType: "ptcHit", to: r.id, dv: [n[0] * g, n[1] * g, n[2] * g], r: [cp[0] - bx, cp[1] - by, cp[2] - bz] });
+        self.postMessage({ messageType: "ptcHit", to: r.id, dv: [n[0] * g, n[1] * g, n[2] * g], r: [cp[0] - bx, cp[1] - by, cp[2] - bz],
+          pinch: n[1] > PINCH_DOWN }); // we came down on top of it
       } catch (e) { /* not in a worker */ }
     });
+
+    // pinched on this screen: a car pressing down on us while we are on the
+    // track, or two cars pressing from opposite sides
+    if (!contacts.length || now < pinchUntil) return;
+    for (var a = 0; a < contacts.length; a++) {
+      var c = contacts[a];
+      if (grounded && c.n[1] < -PINCH_DOWN && c.pressed > PINCH_PRESS) {
+        fling(f, i, { x: px - c.bx, z: pz - c.bz, speed: c.pressed }, now);
+        return;
+      }
+      for (var b2 = a + 1; b2 < contacts.length; b2++) {
+        var e = contacts[b2];
+        if (c.n[0] * e.n[0] + c.n[1] * e.n[1] + c.n[2] * e.n[2] < PINCH_OPPOSED && Math.max(c.pressed, e.pressed) > PINCH_PRESS) {
+          fling(f, i, { axis: c.n, speed: Math.max(c.pressed, e.pressed) }, now);
+          return;
+        }
+      }
+    }
   };
 
   // for tests

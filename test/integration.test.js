@@ -74,6 +74,7 @@ function applyMixin(text, m) {
     polyVersion: "0.6.3",
     getSimURL: () => "blob:sim-1",
     getAllMods: () => [mod, other],
+    saveModsToLocalStorage: () => { pml.saved = (pml.saved || 0) + 1; },
     registerClassMixin: (scope, name, m) => classMixins.push({ scope, name, m }),
     registerSimWorkerMixin: (m) => workerMixins.push(m),
     getFromPolyTrack: () => ({
@@ -88,6 +89,7 @@ function applyMixin(text, m) {
   await mod.preInit(pml);
   await mod.init(pml);
   check("mod: marked as physics-changing", mod.touchingPhysics === true);
+  check("mod: switches itself to the latest version and saves that, once", mod.savedLatest === true && pml.saved === 1);
   check("mod: registers 2 join mixins and 4 worker mixins", classMixins.length === 2 && workerMixins.length === 4);
 
   // ---- join rules ---------------------------------------------------------
@@ -159,6 +161,11 @@ function applyMixin(text, m) {
   check("knocks: a hit on us reaches the simulation, sender taken from the connection", !!knock && knock.from === 5 && knock.dv.join() === "4,0,0");
   ch.onmessage({ data: JSON.stringify({ to: 6, dv: [0, 0, 7], r: [0, 0, 1] }) });
   check("knocks: the host passes on a hit between two other players", sent[6].length === 2 && sent[6][1].from === 5 && sent[6][1].dv.join() === "0,0,7");
+  simWorker.listeners.forEach((cb) => cb({ data: { messageType: 'ptcHit', to: 6, dv: [0, -2, 0], r: [0, 0.5, 0], pinch: true } }));
+  posted.length = 0;
+  ch.onmessage({ data: JSON.stringify({ to: 1, dv: [0, -1, 0], r: [0, 1, 0], pinch: true }) });
+  ch.onmessage({ data: JSON.stringify({ to: 6, dv: [0, -1, 0], r: [0, 1, 0], pinch: 'yes' }) });
+  check('knocks: a landing (pinch) is passed on as such, and only as a real true', sent[6].at(-2).pinch === true && posted.at(-1)?.pinch === true && sent[6].at(-1).pinch === false);
   const before = posted.length + sent[6].length;
   for (const bad of ["nonsense", JSON.stringify({ to: 1, dv: [1, "2", 3], r: [0, 0, 0] }), JSON.stringify({ to: 1, dv: [1, 2, null], r: [0, 0, 0] }),
     JSON.stringify({ to: 1, dv: [1, 2, 3] }), JSON.stringify({ to: 1, dv: [1, 2, 3], r: [0, 0, 0], pad: "x".repeat(500) })]) ch.onmessage({ data: bad });

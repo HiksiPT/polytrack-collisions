@@ -175,6 +175,51 @@ function check(name, ok, detail) {
   const hop = Math.max(...pushed.trace.slice(2000, 2600).map((s2, k) => s2.p[1] - free.trace[2000 + k].p[1]));
   check("impulse from another mod: the car is thrown upwards", hop > 1.5 && hop < 6, `${hop.toFixed(2)} m above the free run`);
 
+  // 9. pinches
+  check("pinch: none of the crashes above was a pinch", ptc.pinches === 0, `${ptc.pinches}`);
+  const horizontal = (s2) => Math.hypot(s2.v[0], s2.v[2]);
+  const withVelocity = (trace) => trace.map((s2, k) => ({ ...s2, v: k ? s2.p.map((x, j) => (x - trace[k - 1].p[j]) * 1000) : [0, 0, 0] }));
+  const freeV = withVelocity(free.trace);
+  const freeTop = Math.max(...freeV.slice(1500, 3500).map(horizontal));
+  // a car comes down on top of ours at 6 m/s while we drive
+  const landAt = 2500;
+  let sentLanding = 0;
+  const landed = drive(N, (f) => {
+    const k = Math.min(N - 1, f);
+    if (f < landAt - 600) return [{ id: 8, f: 50000 + f, p: [free.trace[k].p[0], free.trace[k].p[1] + 40, free.trace[k].p[2]], q: free.trace[k].q, s: true, e: false }];
+    const drop = Math.max(0.9, 4 - (f - (landAt - 600)) * 0.006); // falls from 4 m above to resting on our roof
+    sentLanding++;
+    return [{ id: 8, f: 50000 + f, p: [free.trace[k].p[0], free.trace[k].p[1] + drop, free.trace[k].p[2]], q: free.trace[k].q, s: true, e: false }];
+  });
+  const landedV = withVelocity(landed.trace);
+  // fastest gain over the free run, within 50 ms
+  const gain = (v) => Math.max(...v.map((s2, k) => (k > 1500 && k < N - 60 ? Math.max(...v.slice(k, k + 50).map(horizontal)) - horizontal(freeV[k]) : -1e9)));
+  const landedGain = gain(landedV);
+  check("pinch: a car landing on ours flings it out", ptc.pinches >= 1 && landedGain > 15,
+    `${ptc.pinches} pinch(es), up to ${(landedGain * 3.6).toFixed(0)} km/h faster than without`);
+  // squeezed between two cars closing in from both sides
+  const squeezeAt = 2500;
+  const side3 = (k, d) => free.trace[k].p.map((v, j) => v + right[j] * d);
+  const afterLanding = ptc.pinches;
+  const squeezed = drive(N, (f) => {
+    const k = Math.min(N - 1, f), d = f < squeezeAt - 300 ? 8 : Math.max(1.5, 8 - (f - (squeezeAt - 300)) * 0.01);
+    return [{ id: 8, f: 50000 + f, p: side3(k, d), q: free.trace[k].q, s: true, e: false }, { id: 9, f: 50000 + f, p: side3(k, -d), q: free.trace[k].q, s: true, e: false }];
+  });
+  const squeezedGain = gain(withVelocity(squeezed.trace));
+  check("pinch: squeezed between two cars flings it out", ptc.pinches > afterLanding && squeezedGain > 15, `up to ${(squeezedGain * 3.6).toFixed(0)} km/h faster`);
+  // the other player's game saw itself land on us
+  const before9 = ptc.pinches;
+  drive(N, (f) => { if (f === 2504) ptc.knock({ from: 4, dv: [0, -3, 0], r: [0, 1, 0], pinch: true }); return far(f); });
+  check("pinch: reported by the car that landed on us", ptc.pinches === before9 + 1);
+  // knocks from two players at once, from opposite sides
+  drive(N, (f) => {
+    if (f === 2504) { ptc.knock({ from: 4, dv: right.map((v) => v * 5), r: [0, 0, 0] }); ptc.knock({ from: 7, dv: right.map((v) => v * -5), r: [0, 0, 0] }); }
+    return [...far(f), { id: 7, f: 50000 + f, p: [wall.p[0], wall.p[1] + 400, wall.p[2]], q: wall.q, s: true, e: false }];
+  });
+  check("pinch: reported by the two cars squeezing us", ptc.pinches === before9 + 2);
+  check("pinch: a single knock from one side is not a pinch", (() => { const b = ptc.pinches;
+    drive(N, (f) => { if (f === 2504) ptc.knock({ from: 4, dv: right.map((v) => v * 5), r: [0, 0, 0] }); return far(f); }); return ptc.pinches === b; })());
+
   console.log(failed ? `${failed} check(s) failed` : "all checks passed");
   process.exit(failed ? 1 : 0);
 })().catch((e) => { console.error(e); process.exit(1); });
